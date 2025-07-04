@@ -1,4 +1,5 @@
-use crate::{Guard, Own, Ref, pin};
+use crate::{Own, pin};
+use std::sync::Arc;
 
 #[test]
 fn live_ref_get_some() {
@@ -40,4 +41,170 @@ fn dead_ref_get_none_after_reuse() {
     assert_eq!(r.get(&g), None);
 
     let _ = o;
+}
+
+#[test]
+fn ref_with_helper() {
+    let o = Own::new_box(42);
+    let r = o.weak;
+
+    let result = r.with(|x| *x * 2);
+    assert_eq!(result, Some(84));
+
+    drop(o);
+    let result = r.with(|x| *x * 2);
+    assert_eq!(result, None);
+}
+
+#[test]
+fn ref_map_helper() {
+    let o = Own::new_box(String::from("hello"));
+    let r = o.weak;
+
+    let mapped = r.map(|s| s.as_str());
+    let g = pin();
+    assert_eq!(mapped.get(&g), Some("hello"));
+
+    drop(o);
+    assert_eq!(mapped.get(&g), None);
+}
+
+#[test]
+fn ref_map_with_guard() {
+    let o = Own::new_box(vec![1, 2, 3]);
+    let r = o.weak;
+
+    let g = pin();
+    let mapped = r.map_with(|v| &v[1], &g);
+    assert_eq!(mapped.get(&g), Some(&2));
+
+    drop(o);
+    assert_eq!(mapped.get(&g), None);
+}
+
+#[test]
+fn ref_copy_and_clone() {
+    let o = Own::new_box(42);
+    let r1 = o.weak;
+    let r2 = r1;
+    #[allow(clippy::clone_on_copy)]
+    let r3 = r1.clone();
+
+    let g = pin();
+    assert_eq!(r1.get(&g), Some(&42));
+    assert_eq!(r2.get(&g), Some(&42));
+    assert_eq!(r3.get(&g), Some(&42));
+
+    drop(o);
+    assert_eq!(r1.get(&g), None);
+    assert_eq!(r2.get(&g), None);
+    assert_eq!(r3.get(&g), None);
+}
+
+#[test]
+fn multiple_refs_same_object() {
+    let o = Own::new_box(42);
+    let r1 = o.weak;
+    let r2 = o.weak;
+
+    let g = pin();
+    assert_eq!(r1.get(&g), Some(&42));
+    assert_eq!(r2.get(&g), Some(&42));
+
+    drop(o);
+    assert_eq!(r1.get(&g), None);
+    assert_eq!(r2.get(&g), None);
+}
+
+#[test]
+fn arc_pointer_type() {
+    let o = Own::new(Arc::new(42));
+    let r = o.weak;
+
+    let g = pin();
+    assert_eq!(r.get(&g), Some(&42));
+
+    drop(o);
+    assert_eq!(r.get(&g), None);
+}
+
+#[test]
+fn string_pointer_type() {
+    let o = Own::new(String::from("hello"));
+    let r = o.weak;
+
+    let g = pin();
+    assert_eq!(r.get(&g), Some("hello"));
+
+    drop(o);
+    assert_eq!(r.get(&g), None);
+}
+
+#[test]
+fn vec_pointer_type() {
+    let o = Own::new(vec![1, 2, 3]);
+    let r = o.weak;
+
+    let g = pin();
+    assert_eq!(r.get(&g), Some(&[1, 2, 3][..]));
+
+    drop(o);
+    assert_eq!(r.get(&g), None);
+}
+
+#[test]
+fn unit_pointer_type() {
+    let o = Own::new(());
+    let r = o.weak;
+
+    let g = pin();
+    assert_eq!(r.get(&g), Some(&()));
+
+    drop(o);
+    assert_eq!(r.get(&g), None);
+}
+
+#[test]
+fn sequential_reuse() {
+    let o1 = Own::new_box(1);
+    let r1 = o1.weak;
+    let o2 = Own::new_from(Box::new(2), o1);
+    let r2 = o2.weak;
+    let o3 = Own::new_from(Box::new(3), o2);
+
+    let g = pin();
+    assert_eq!(r1.get(&g), None);
+    assert_eq!(r2.get(&g), None);
+    assert_eq!(o3.weak.get(&g), Some(&3));
+
+    drop(o3);
+    assert_eq!(r1.get(&g), None);
+    assert_eq!(r2.get(&g), None);
+}
+
+#[test]
+fn debug_formatting() {
+    let o = Own::new_box(42);
+    let r = o.weak;
+
+    let debug_str = format!("{o:?}");
+    assert!(debug_str.contains("Own"));
+    assert!(debug_str.contains("42"));
+
+    let debug_str = format!("{r:?}");
+    assert!(debug_str.contains("Ref::Live"));
+    assert!(debug_str.contains("42"));
+
+    drop(o);
+    let debug_str = format!("{r:?}");
+    assert!(debug_str.contains("Ref::Dead"));
+}
+
+#[test]
+fn deref_trait() {
+    let o = Own::new_box(42);
+    assert_eq!(*o, 42);
+
+    let s = Own::new(String::from("hello"));
+    assert_eq!(&*s, "hello");
 }
