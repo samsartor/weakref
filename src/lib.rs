@@ -2,8 +2,32 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
 
-mod core;
-pub use core::{Guard, IsPtr, Own, Ref, pin};
+mod guts;
+pub use guts::{Guard, IsPtr, MappedRef, Own, Ref, pin};
+
+impl<T: ?Sized> Ref<T> {
+    pub fn with<O>(self, func: impl FnOnce(&T) -> O) -> Option<O> {
+        self.get(&pin()).map(func)
+    }
+
+    pub fn map_with<R: ?Sized>(self, func: impl FnOnce(&T) -> &R, guard: &Guard) -> MappedRef<R> {
+        self.mapped().map_with(func, guard)
+    }
+
+    pub fn map<R: ?Sized>(self, func: impl FnOnce(&T) -> &R) -> MappedRef<R> {
+        self.mapped().map_with(func, &pin())
+    }
+}
+
+impl<T: ?Sized> MappedRef<T> {
+    pub fn with<O>(self, func: impl FnOnce(&T) -> O) -> Option<O> {
+        self.get(&pin()).map(func)
+    }
+
+    pub fn map<R: ?Sized>(self, func: impl FnOnce(&T) -> &R) -> MappedRef<R> {
+        self.map_with(func, &pin())
+    }
+}
 
 impl<T: Send + 'static> Own<Box<T>> {
     pub fn new_box(value: T) -> Self {
@@ -35,9 +59,16 @@ impl<T: fmt::Debug + ?Sized> fmt::Debug for Ref<T> {
     }
 }
 
-impl<T: ?Sized> Ref<T> {
-    pub fn with<O>(self, func: impl FnOnce(&T) -> O) -> Option<O> {
-        self.get(&pin()).map(func)
+impl<T: fmt::Debug + ?Sized> fmt::Debug for MappedRef<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.get(&pin()) {
+            Some(live) => {
+                // `.field` requires `T::Sized` and `field_with` is unstable
+                //f.debug_tuple("Ref::Live").field(live).finish()
+                write!(f, "MappedRef::Live({live:?})")
+            }
+            None => f.debug_tuple("MappedRef::Dead").finish_non_exhaustive(),
+        }
     }
 }
 
