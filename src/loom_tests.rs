@@ -6,6 +6,7 @@ compile_error! { r#"test with `RUSTFLAGS="--cfg loom" cargo test`"# }
 #[test]
 pub fn concurrent_reuse_get() {
     loom::model(|| {
+        crate::guts::empty_recycler();
         let o = Own::new_box(42);
         loom::thread::spawn(move || {
             let g = pin();

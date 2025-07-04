@@ -10,6 +10,11 @@ use loom::sync::atomic::{AtomicUsize, Ordering};
 
 static RECYCLER: SegQueue<&'static Indirection> = SegQueue::new();
 
+#[allow(unused)]
+pub(crate) fn empty_recycler() {
+    while RECYCLER.pop().is_some() {}
+}
+
 pub use crossbeam_epoch::{Guard, pin};
 
 pub trait IsPtr {
