@@ -5,6 +5,11 @@ use std::sync::Arc;
 mod guts;
 pub use guts::{Guard, IsPtr, MappedRef, Own, Ref, pin};
 
+#[cfg(all(test, loom))]
+mod loom_tests;
+#[cfg(all(test, not(loom)))]
+mod ui_tests;
+
 impl<T: ?Sized> Ref<T> {
     pub fn with<O>(self, func: impl FnOnce(&T) -> O) -> Option<O> {
         self.get(&pin()).map(func)
@@ -40,8 +45,8 @@ where
     P::T: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // `.field` requires `T::Sized` and `field_with` is unstable
-        //f.debug_tuple("Own").field(live).finish()
+        // `.field` requires `T: Sized` and `field_with` is unstable
+        // f.debug_tuple("Own").field(live).finish()
         write!(f, "Own({:?})", &**self)
     }
 }
@@ -50,8 +55,8 @@ impl<T: fmt::Debug + ?Sized> fmt::Debug for Ref<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.get(&pin()) {
             Some(live) => {
-                // `.field` requires `T::Sized` and `field_with` is unstable
-                //f.debug_tuple("Ref::Live").field(live).finish()
+                // `.field` requires `T: Sized` and `field_with` is unstable
+                // f.debug_tuple("Ref::Live").field(live).finish()
                 write!(f, "Ref::Live({live:?})")
             }
             None => f.debug_tuple("Ref::Dead").finish_non_exhaustive(),
@@ -63,8 +68,8 @@ impl<T: fmt::Debug + ?Sized> fmt::Debug for MappedRef<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.get(&pin()) {
             Some(live) => {
-                // `.field` requires `T::Sized` and `field_with` is unstable
-                //f.debug_tuple("Ref::Live").field(live).finish()
+                // `.field` requires `T: Sized` and `field_with` is unstable
+                // f.debug_tuple("MappedRef::Live").field(live).finish()
                 write!(f, "MappedRef::Live({live:?})")
             }
             None => f.debug_tuple("MappedRef::Dead").finish_non_exhaustive(),

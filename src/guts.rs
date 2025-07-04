@@ -1,7 +1,11 @@
 use core::ops::Deref;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicUsize, Ordering};
 use crossbeam_queue::SegQueue;
+
+#[cfg(not(loom))]
+use core::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(loom)]
+use loom::sync::atomic::{AtomicUsize, Ordering};
 
 static RECYCLER: SegQueue<&'static Indirection> = SegQueue::new();
 
@@ -35,22 +39,21 @@ pub struct Own<P: IsPtr + Send + 'static> {
 
 impl<P: IsPtr + Send + 'static> Own<P> {
     pub fn new(ptr: P) -> Self {
+        match RECYCLER.pop() {
+            Some(ind) => Self::new_reuse(ind, ptr),
+            None => Self::new_alloc(ptr),
+        }
+    }
+
+    pub fn new_from<R: IsPtr + Send + 'static>(ptr: P, mut other: Own<R>) -> Self {
+        Self::new_reuse(unsafe { other.kill_mut(&pin()) }.unwrap(), ptr)
+    }
+
+    fn new_reuse(ind: &'static Indirection, ptr: P) -> Self {
         let real = P::into_raw_ptr(ptr);
-        let (ind, expected_gen) = match RECYCLER.pop() {
-            Some(ind) => {
-                ind.pointer.store(real.addr(), Ordering::Relaxed);
-                (ind, ind.current_gen.load(Ordering::Relaxed))
-            }
-            None => {
-                let ind = Box::leak(Box::new(Indirection {
-                    pointer: AtomicUsize::new(real.addr()),
-                    current_gen: AtomicUsize::new(0),
-                }));
-                (&*ind, 0usize)
-            }
-        };
-        let ind: *const Indirection = ind;
-        let fake = real.with_addr(ind.addr());
+        ind.pointer.store(real.addr(), Ordering::Relaxed);
+        let expected_gen = ind.current_gen.load(Ordering::Relaxed);
+        let fake = real.with_addr((ind as *const Indirection).addr());
         Own {
             weak: Ref {
                 indirection: fake,
@@ -58,11 +61,26 @@ impl<P: IsPtr + Send + 'static> Own<P> {
             },
         }
     }
-}
 
-impl<P: IsPtr + Send + 'static> Drop for Own<P> {
-    fn drop(&mut self) {
-        let guard = pin();
+    fn new_alloc(ptr: P) -> Self {
+        let real = P::into_raw_ptr(ptr);
+        let ind = Box::leak(Box::new(Indirection {
+            pointer: AtomicUsize::new(real.addr()),
+            current_gen: AtomicUsize::new(0),
+        }));
+        let expected_gen = 0;
+        let fake = real.with_addr((ind as *const Indirection).addr());
+        Own {
+            weak: Ref {
+                indirection: fake,
+                expected_gen,
+            },
+        }
+    }
+
+    /// # Safety
+    /// Absolutely no use of `self` is permitted after calling this function.
+    unsafe fn kill_mut(&mut self, guard: &Guard) -> Option<&'static Indirection> {
         let ind: &'static Indirection = unsafe { &*self.weak.indirection.cast() };
 
         // Increment the generation counter with Release ordering so that no [Ref::get] can
@@ -83,6 +101,18 @@ impl<P: IsPtr + Send + 'static> Drop for Own<P> {
         // Otherwise leak it forever, since it is completely unusable. This should
         // never happen in practice.
         if new_gen != usize::MAX {
+            Some(ind)
+        } else {
+            None
+        }
+    }
+}
+
+impl<P: IsPtr + Send + 'static> Drop for Own<P> {
+    fn drop(&mut self) {
+        let guard = pin();
+        // SAFETY: we are in drop
+        if let Some(ind) = unsafe { self.kill_mut(&guard) } {
             RECYCLER.push(ind);
         }
     }
@@ -104,11 +134,11 @@ impl<P: IsPtr + Send + 'static> Deref for Own<P> {
 
 #[repr(C)]
 pub struct Ref<T: ?Sized> {
-    /// This holds the pointer to the [Indirection]. We annotate it as
-    /// `*mut T` so that the rust compiler includes the additional metadata for
-    /// unsized T. Once std::ptr::Pointee is stable we'll correct the types.
+    /// The pointer to the [Indirection]. We annotate it as `*mut T` so that
+    /// the rust compiler includes the additional metadata for unsized T. Once
+    /// std::ptr::Pointee is stable we'll correct the types.
     indirection: *mut T,
-    // This Ref is only alive if the generation numbers match.
+    /// This Ref is only alive if the generation numbers match.
     expected_gen: usize,
 }
 
