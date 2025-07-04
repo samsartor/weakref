@@ -1,6 +1,7 @@
 use core::ops::Deref;
 use core::ptr::NonNull;
 use crossbeam_queue::SegQueue;
+use std::mem::ManuallyDrop;
 
 #[cfg(not(loom))]
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -45,8 +46,8 @@ impl<P: IsPtr + Send + 'static> Own<P> {
         }
     }
 
-    pub fn new_from<R: IsPtr + Send + 'static>(ptr: P, mut other: Own<R>) -> Self {
-        Self::new_reuse(unsafe { other.kill_mut(&pin()) }.unwrap(), ptr)
+    pub fn new_from<R: IsPtr + Send + 'static>(ptr: P, other: Own<R>) -> Self {
+        Self::new_reuse(other.kill(&pin()).unwrap(), ptr)
     }
 
     fn new_reuse(ind: &'static Indirection, ptr: P) -> Self {
@@ -76,6 +77,12 @@ impl<P: IsPtr + Send + 'static> Own<P> {
                 expected_gen,
             },
         }
+    }
+
+    fn kill(self, guard: &Guard) -> Option<&'static Indirection> {
+        let mut this = ManuallyDrop::new(self);
+        // SAFETY: we move self and put it in manuallydrop, so it will not drop again
+        unsafe { this.kill_mut(guard) }
     }
 
     /// # Safety
