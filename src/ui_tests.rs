@@ -1,5 +1,12 @@
-use crate::{Own, pin};
+use crate::{Own, Ref, pin};
 use std::sync::Arc;
+
+#[test]
+fn very_bad() {
+    let mut o = Own::new_box(42);
+    o.weak = Ref::null();
+    drop(o);
+}
 
 #[test]
 fn live_ref_get_some() {
