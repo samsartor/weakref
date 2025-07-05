@@ -10,11 +10,15 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use loom::sync::atomic::{AtomicUsize, Ordering};
 
 type GenerationCounter = &'static AtomicUsize;
-const BLOCK_SIZE: usize = 512;
 static GLOBAL_RECYCLER: SegQueue<[GenerationCounter; BLOCK_SIZE]> = SegQueue::new();
 thread_local! {
     static LOCAL_RECYCLER: RefCell<Vec<GenerationCounter>> = RefCell::new(Vec::with_capacity(BLOCK_SIZE*2));
 }
+
+#[cfg(loom)]
+const BLOCK_SIZE: usize = 16;
+#[cfg(not(loom))]
+const BLOCK_SIZE: usize = 256;
 
 pub(crate) fn new_generation_counter() -> GenerationCounter {
     LOCAL_RECYCLER.with_borrow_mut(|local_recycler| {
@@ -48,6 +52,16 @@ pub(crate) fn recycle_generation_counter(counter: GenerationCounter) {
 pub(crate) fn empty_recycler() {
     LOCAL_RECYCLER.with_borrow_mut(|r| r.clear());
     while GLOBAL_RECYCLER.pop().is_some() {}
+}
+
+#[cfg(test)]
+pub(crate) fn local_recycler_len() -> usize {
+    LOCAL_RECYCLER.with_borrow(|r| r.len())
+}
+
+#[cfg(test)]
+pub(crate) fn global_recycler_len() -> usize {
+    GLOBAL_RECYCLER.len()
 }
 
 /// Implemented for any owning pointer.

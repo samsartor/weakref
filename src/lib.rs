@@ -68,6 +68,8 @@ pub use crossbeam_epoch::pin;
 mod loom_tests;
 #[cfg(test)]
 mod ui_tests;
+#[cfg(test)]
+mod recycler_tests;
 
 impl<T: Send + 'static> Own<Box<T>> {
     /// The standard way to create an `Own<Box<T>> + Ref<T>`.
