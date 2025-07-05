@@ -2,19 +2,52 @@ use core::ops::Deref;
 use core::ptr::NonNull;
 use crossbeam_epoch::{Guard, pin};
 use crossbeam_queue::SegQueue;
-use std::mem::ManuallyDrop;
+use std::{cell::RefCell, mem::ManuallyDrop};
 
 #[cfg(not(loom))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(loom)]
 use loom::sync::atomic::{AtomicUsize, Ordering};
 
-type CurrentGen = &'static AtomicUsize;
-static RECYCLER: SegQueue<CurrentGen> = SegQueue::new();
+type GenerationCounter = &'static AtomicUsize;
+const BLOCK_SIZE: usize = 512;
+static GLOBAL_RECYCLER: SegQueue<[GenerationCounter; BLOCK_SIZE]> = SegQueue::new();
+thread_local! {
+    static LOCAL_RECYCLER: RefCell<Vec<GenerationCounter>> = RefCell::new(Vec::with_capacity(BLOCK_SIZE*2));
+}
+
+pub(crate) fn new_generation_counter() -> GenerationCounter {
+    LOCAL_RECYCLER.with_borrow_mut(|local_recycler| {
+        if let Some(counter) = local_recycler.pop() {
+            return counter;
+        }
+        if let Some(block) = GLOBAL_RECYCLER.pop() {
+            let [next, rest @ ..] = block;
+            local_recycler.extend(rest);
+            return next;
+        }
+        let block: [AtomicUsize; BLOCK_SIZE] = std::array::from_fn(|_| AtomicUsize::new(0));
+        let block = Box::leak(Box::new(block));
+        local_recycler.extend(block.iter());
+        local_recycler.pop().unwrap()
+    })
+}
+
+pub(crate) fn recycle_generation_counter(counter: GenerationCounter) {
+    LOCAL_RECYCLER.with_borrow_mut(|local_recycler| {
+        if local_recycler.len() == local_recycler.capacity() {
+            let block: [GenerationCounter; BLOCK_SIZE] =
+                std::array::from_fn(|_| local_recycler.pop().unwrap());
+            GLOBAL_RECYCLER.push(block);
+        }
+        local_recycler.push(counter);
+    })
+}
 
 #[allow(unused)]
 pub(crate) fn empty_recycler() {
-    while RECYCLER.pop().is_some() {}
+    LOCAL_RECYCLER.with_borrow_mut(|r| r.clear());
+    while GLOBAL_RECYCLER.pop().is_some() {}
 }
 
 /// Implemented for any owning pointer.
@@ -59,10 +92,7 @@ pub struct Own<P: IsPtr + Send + 'static> {
 impl<P: IsPtr + Send + 'static> Own<P> {
     /// Wrap the given pointer so that it can inform weak references when dropped.
     pub fn new(ptr: P) -> Self {
-        match RECYCLER.pop() {
-            Some(ind) => Self::new_reuse(ind, ptr),
-            None => Self::new_alloc(ptr),
-        }
+        Self::new_reuse(new_generation_counter(), ptr)
     }
 
     /// Like [Own::new], but cheaper if an existing owned needs to be dropped.
@@ -76,7 +106,7 @@ impl<P: IsPtr + Send + 'static> Own<P> {
         self._weak
     }
 
-    fn new_reuse(current_gen: CurrentGen, ptr: P) -> Self {
+    fn new_reuse(current_gen: GenerationCounter, ptr: P) -> Self {
         let pointer = Some(P::into_raw_ptr(ptr));
         let expected_gen = current_gen.load(Ordering::Acquire);
         Own {
@@ -88,20 +118,7 @@ impl<P: IsPtr + Send + 'static> Own<P> {
         }
     }
 
-    fn new_alloc(ptr: P) -> Self {
-        let pointer = Some(P::into_raw_ptr(ptr));
-        let current_gen = Box::leak(Box::new(AtomicUsize::new(0)));
-        let expected_gen = 0;
-        Own {
-            _weak: Ref {
-                current_gen,
-                expected_gen,
-                pointer,
-            },
-        }
-    }
-
-    fn kill(self, guard: &Guard) -> Option<CurrentGen> {
+    fn kill(self, guard: &Guard) -> Option<GenerationCounter> {
         let mut this = ManuallyDrop::new(self);
         // SAFETY: self is moved into ManuallyDrop, preventing double-drop
         unsafe { this.kill_mut(guard) }
@@ -110,7 +127,7 @@ impl<P: IsPtr + Send + 'static> Own<P> {
     /// # Safety
     /// Absolutely no use of `self` is permitted after calling this function,
     /// even to drop it.
-    unsafe fn kill_mut(&mut self, guard: &Guard) -> Option<CurrentGen> {
+    unsafe fn kill_mut(&mut self, guard: &Guard) -> Option<GenerationCounter> {
         // Increment the generation counter with Release ordering so that no
         // [Ref::get] can access the pointer from now on. If a load has already
         // occurred and the pointer is running around somewhere, the cleanup
@@ -150,8 +167,8 @@ impl<P: IsPtr + Send + 'static> Drop for Own<P> {
     fn drop(&mut self) {
         let guard = pin();
         // SAFETY: Called from Drop::drop, so self will never be used again
-        if let Some(ind) = unsafe { self.kill_mut(&guard) } {
-            RECYCLER.push(ind);
+        if let Some(counter) = unsafe { self.kill_mut(&guard) } {
+            recycle_generation_counter(counter);
         }
     }
 }
@@ -173,7 +190,7 @@ unsafe impl<P: IsPtr + Send> Sync for Own<P> where P::T: Sync {}
 #[repr(C)]
 pub struct Ref<T: ?Sized> {
     /// This Ref is only alive if the generation numbers match.
-    current_gen: CurrentGen,
+    current_gen: GenerationCounter,
     expected_gen: usize,
     pointer: Option<NonNull<T>>,
 }
