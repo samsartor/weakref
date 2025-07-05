@@ -1,6 +1,11 @@
-//! Weakref provides a cheep `Copy + 'static` reference type [`Ref<T>`]. You can
+//! Weakref provides a cheap `Copy + 'static` reference type [`Ref<T>`]. You can
 //! pass it anywhere almost effortlessly, then check if the reference is alive
 //! at runtime.
+//!
+//! This is inspired by <https://verdagon.dev/blog/surprising-weak-refs>, although
+//! the implementation has changed quite a bit vs what is used in Vale.
+//!
+//! # Basic Usage
 //!
 //! ```
 //! use weakref::{Own, Ref, pin, refer};
@@ -16,6 +21,23 @@
 //!
 //! drop(data);
 //! ```
+//!
+//! # Performance Characteristics
+//!
+//! - **Creation**: `Own::new()` is O(1) with minimal allocation overhead
+//! - **Copying refs**: `Ref` is `Copy`, so totally free
+//! - **Access**: `Ref::get()` is O(1) but requires acquiring an epoch guard
+//! - **Dropping**: `Own` drop is O(1), cleanup is deferred to epoch collection
+//! - **Memory**: Each `Own` and `Ref` has ~24 bytes overhead (in addition to the original pointer and data)
+//!
+//! Note that weakref must leak ~8 bytes for every simultaneously-existing object. Those leaked allocations
+//! will be reused by weakref indefinitely but can never be returned to the system.
+//!
+//! Compared to `Arc<T>` + `Weak<T>`:
+//! - Faster cloning (no atomic operations)
+//! - Cheaper storage (no reference counting)
+//! - Requires explicit pinning for access
+//! - Uses epoch-based memory reclamation instead of reference counting
 
 use std::path;
 use std::pin::Pin;
@@ -77,15 +99,15 @@ impl<P: IsPtr + core::ops::Deref> IsPtr for Pin<P> {
     type T = P::T;
 
     fn into_raw_ptr(this: Self) -> NonNull<P::T> {
-        // SAFTEY: we never expose the unpinned T for mutation or move
+        // SAFETY: Pin invariant is maintained - we never expose the unpinned T for mutation or move
         let b = unsafe { Pin::into_inner_unchecked(this) };
         IsPtr::into_raw_ptr(b)
     }
 
     unsafe fn from_raw_ptr(ptr: NonNull<P::T>) -> Self {
-        // SAFETY: same guarentees as the caller
+        // SAFETY: Pointer must have been returned from into_raw_ptr
         let b: P = unsafe { IsPtr::from_raw_ptr(ptr) };
-        // SAFTEY: we never exposed the unpinned T for mutation or move
+        // SAFETY: Pin invariant preserved - the T was never exposed for mutation or move during conversion
         unsafe { Pin::new_unchecked(b) }
     }
 }
@@ -98,7 +120,7 @@ impl<T: ?Sized> IsPtr for Box<T> {
     }
 
     unsafe fn from_raw_ptr(ptr: NonNull<T>) -> Self {
-        // SAFETY: same guarentees as the caller
+        // SAFETY: Pointer must have been returned from into_raw_ptr
         unsafe { Box::from_raw(ptr.as_ptr()) }
     }
 }
@@ -111,7 +133,7 @@ impl<T: ?Sized> IsPtr for Arc<T> {
     }
 
     unsafe fn from_raw_ptr(ptr: NonNull<T>) -> Self {
-        // SAFETY: same guarentees as the caller
+        // SAFETY: Pointer must have been returned from into_raw_ptr
         unsafe { Arc::from_raw(ptr.as_ptr()) }
     }
 }
@@ -125,7 +147,7 @@ impl IsPtr for String {
     }
 
     unsafe fn from_raw_ptr(ptr: NonNull<str>) -> Self {
-        // SAFETY: same guarentees as the caller
+        // SAFETY: Pointer must have been returned from into_raw_ptr
         let b: Box<str> = unsafe { IsPtr::from_raw_ptr(ptr) };
         b.into()
     }
@@ -140,7 +162,7 @@ impl IsPtr for path::PathBuf {
     }
 
     unsafe fn from_raw_ptr(ptr: NonNull<path::Path>) -> Self {
-        // SAFETY: same guarentees as the caller
+        // SAFETY: Pointer must have been returned from into_raw_ptr
         let b: Box<path::Path> = unsafe { IsPtr::from_raw_ptr(ptr) };
         b.into()
     }
@@ -155,7 +177,7 @@ impl<T> IsPtr for Vec<T> {
     }
 
     unsafe fn from_raw_ptr(ptr: NonNull<[T]>) -> Self {
-        // SAFETY: same guarentees as the caller
+        // SAFETY: Pointer must have been returned from into_raw_ptr
         let b: Box<[T]> = unsafe { IsPtr::from_raw_ptr(ptr) };
         b.into()
     }
@@ -171,17 +193,27 @@ impl IsPtr for () {
     unsafe fn from_raw_ptr(_: NonNull<Self::T>) -> Self {}
 }
 
-/// Like [Own::refer] but does not try to capture the owner.
+/// Creates a weak reference without trying to capture the owner.
 ///
+/// This macro is equivalent to [Own::refer] but is better to use
+/// inside closures. Calling `owner.refer()` will try to capture
+/// a reference to `owner` from the enclosing scope (or otherwise move it entirely).
+/// This macro takes advantage of
+/// [disjoint capturing](https://doc.rust-lang.org/reference/types/closure.html#capture-precision)
+/// to precreate a weak refrence and capture that instead.
+///
+/// __Make sure to mark your closure as `move`, or you may get a "cannot move out of" error.__
+///
+/// # Examples
 ///
 /// ```
 ///# use weakref::{Own, Ref, pin, refer};
 ///# use std::sync::{Arc, Weak};
-/// // With weakref
+/// // With weakref - owner is not moved into closure
 /// let data = Own::new_box(42);
 /// move || { refer!(data).get(&pin()); };
 ///
-/// // With std
+/// // With std - we need to call downgrade outside
 /// let data = Arc::new(42);
 /// let weak_data = Arc::downgrade(&data);
 /// move || { weak_data.upgrade(); };

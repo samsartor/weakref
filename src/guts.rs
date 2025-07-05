@@ -20,7 +20,7 @@ pub(crate) fn empty_recycler() {
 /// Implemented for any owning pointer.
 ///
 /// # Safety
-/// When accepting an unknown `impl IsPtr`, be aware of the various guarentees
+/// When accepting an unknown `impl IsPtr`, be aware of the various guarantees
 /// expected by all implementors. In particular, it may not be safe to mutate
 /// the pointer since `Pin<T>: IsPtr`.
 pub trait IsPtr {
@@ -103,7 +103,7 @@ impl<P: IsPtr + Send + 'static> Own<P> {
 
     fn kill(self, guard: &Guard) -> Option<CurrentGen> {
         let mut this = ManuallyDrop::new(self);
-        // SAFETY: we move self and put it in manuallydrop, so it will not drop again
+        // SAFETY: self is moved into ManuallyDrop, preventing double-drop
         unsafe { this.kill_mut(guard) }
     }
 
@@ -113,8 +113,8 @@ impl<P: IsPtr + Send + 'static> Own<P> {
     unsafe fn kill_mut(&mut self, guard: &Guard) -> Option<CurrentGen> {
         // Increment the generation counter with Release ordering so that no
         // [Ref::get] can access the pointer from now on. If a load has already
-        // occured and the pointer is running around somewhere, the cleanup
-        // will be defered until that thread is unpinned. Otherwise it may occur
+        // occurred and the pointer is running around somewhere, the cleanup
+        // will be deferred until that thread is unpinned. Otherwise it may occur
         // immediately.
         let new_gen = self._weak.expected_gen + 1;
         if self
@@ -149,7 +149,7 @@ impl<P: IsPtr + Send + 'static> Own<P> {
 impl<P: IsPtr + Send + 'static> Drop for Own<P> {
     fn drop(&mut self) {
         let guard = pin();
-        // SAFETY: we are in drop, so `self` will never be used again
+        // SAFETY: Called from Drop::drop, so self will never be used again
         if let Some(ind) = unsafe { self.kill_mut(&guard) } {
             RECYCLER.push(ind);
         }
@@ -161,7 +161,7 @@ impl<P: IsPtr + Send + 'static> Deref for Own<P> {
 
     fn deref(&self) -> &Self::Target {
         // Provide the reference.
-        // SAFETY: this is always safe since `self` can not have been dropped.
+        // SAFETY: Owner is alive, so pointer is valid and generation matches
         unsafe { self._weak.pointer.unwrap().as_ref() }
     }
 }
@@ -203,7 +203,8 @@ impl<T: ?Sized> Ref<T> {
     /// Notice that the returned reference only borrows from [Guard]. Until the thread is unpinned,
     /// the generation counter does not need to be re-checked.
     pub fn get(self, _guard: &Guard) -> Option<&T> {
-        // As long as the generation number matches and the guard is active, the pointer will not have been freed.
+        // Acquire ordering ensures we see the latest generation - if it matches,
+        // the epoch guard prevents the pointer from being freed
         let current_gen = self.current_gen.load(Ordering::Acquire);
         if current_gen == self.expected_gen {
             Some(unsafe { self.pointer?.as_ref() })

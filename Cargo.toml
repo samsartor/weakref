@@ -2,12 +2,20 @@
 name = "weakref"
 version = "0.1.0"
 edition = "2024"
+authors = ["Sam Sartor <me@samsartor.com>"]
+description = "Copy+static reference type which checks liveness at runtime."
+documentation = "https://docs.rs/weakref"
+readme = "README.md"
+repository = "https://github.com/samsartor/weakref"
+license = "MIT"
+keywords = ["generational", "reference", "copy"]
 
 [dependencies]
-#crossbeam-epoch = "0.9"
-#crossbeam-queue = "0.3"
-crossbeam-epoch = { git = "https://github.com/crossbeam-rs/crossbeam.git" }
-crossbeam-queue = { git = "https://github.com/crossbeam-rs/crossbeam.git" }
+crossbeam-epoch = "0.9"
+crossbeam-queue = "0.3"
+# When using MIRI (as of July 2025)
+#crossbeam-epoch = { git = "https://github.com/crossbeam-rs/crossbeam.git" }
+#crossbeam-queue = { git = "https://github.com/crossbeam-rs/crossbeam.git" }
 
 
 [lints.rust]
