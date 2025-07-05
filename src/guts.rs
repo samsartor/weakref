@@ -270,6 +270,27 @@ impl<T: ?Sized> Ref<T> {
         }
     }
 
+    /// Checks whether the owner has been dopped.
+    ///
+    /// Be aware there are no ordering guarentees on this function. If true
+    /// is returned then the reference was alive at _some point_, but may
+    /// have been killed between the counter being checked and this function
+    /// returning.
+    pub fn is_alive(&self) -> bool {
+        let current_gen = self.current_gen.load(Ordering::Relaxed);
+        current_gen == self.expected_gen && self.pointer.is_some()
+    }
+
+    /// Returns true if this reference is exactly [Ref::null].
+    ///
+    /// Note [Ref::map] and [Ref::filter_map] will return null when called on a dead
+    /// reference or when the filter returns None. But a reference is guarenteed
+    /// to never become null if considered alive at any point previously (only
+    /// loose that liveness).
+    pub fn is_null(&self) -> bool {
+        self.pointer.is_none()
+    }
+
     /// Returns a fake reference where [Ref::get] is always None, as if the owner was dropped.
     /// ```
     ///# use weakref::{Ref, pin};

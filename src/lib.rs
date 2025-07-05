@@ -3,6 +3,8 @@
 //! at runtime. The single owner [`Own<T>`] increments a global per-object generation
 //! counter when dropped.
 //!
+//! Weakref also provides a <https://docs.rs/owning_ref>-style [`Ref::map`] function.
+//!
 //! This is inspired by <https://verdagon.dev/blog/surprising-weak-refs>, although
 //! the implementation has changed quite a bit vs what is used in Vale.
 //!
