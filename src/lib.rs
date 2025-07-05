@@ -1,26 +1,66 @@
-use std::rc::Rc;
+//! Weakref provides a cheep `Copy + 'static` reference type [`Ref<T>`]. You can
+//! pass it anywhere almost effortlessly, then check if the reference is alive
+//! at runtime.
+//!
+//! ```
+//! use weakref::{Own, Ref, pin};
+//!
+//! let data = Own::new(vec![1, 2, 3]);
+//!
+//! std::thread::spawn(move || {
+//!     match data.weak.get(&pin()) {
+//!         Some(data) => println!("{data:?} is still alive!"),
+//!         None => println!("data got dropped!"),
+//!     }
+//! });
+//!
+//! drop(data);
+//! ```
+//!
+//! Notice you can downgrade an `owner: Own<Box<T>>` to a weak
+//! `Ref<T>` by simply accessing [owner.weak](field@Own::weak)
+//! field. This allows closures to [capture weak references from owners](https://doc.rust-lang.org/reference/types/closure.html#capture-precision)
+//! without any need to pre-call methods like `Arc.clone()`:
+//! ```
+//!# use weakref::{Own, Ref, pin};
+//!# use std::sync::{Arc, Weak};
+//! // With weakref
+//! let data = Own::new_box(42);
+//! move || { data.weak.get(&pin()); };
+//!
+//! // With std
+//! let data = Arc::new(42);
+//! let weak_data = Arc::downgrade(&data);
+//! move || { weak_data.upgrade(); };
+//! ```
+
+use std::path;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::{fmt, ptr::NonNull};
 
 mod guts;
-pub use guts::{Guard, IsPtr, Own, Ref, pin};
+pub use guts::{IsPtr, Own, Ref};
+
+/// A guard that allows continued access to a weakref.
+///
+/// This is a re-export from [crossbeam_epoch].
+pub use crossbeam_epoch::Guard;
+
+/// Prevents weakrefs from being dropped mid-access.
+///
+/// This is a re-export from [crossbeam_epoch].
+pub use crossbeam_epoch::pin;
 
 #[cfg(all(test, loom))]
 mod loom_tests;
-#[cfg(all(test, not(loom)))]
+#[cfg(test)]
 mod ui_tests;
 
-impl<T: ?Sized> Ref<T> {
-    pub fn with<O>(self, func: impl FnOnce(&T) -> O) -> Option<O> {
-        self.get(&pin()).map(func)
-    }
-
-    pub fn map<R: ?Sized>(self, func: impl FnOnce(&T) -> &R) -> Ref<R> {
-        self.map_with(func, &pin())
-    }
-}
-
 impl<T: Send + 'static> Own<Box<T>> {
+    /// The standard way to create an `Own<Box<T>> + Ref<T>`.
+    ///
+    /// This simply allocates a box and wraps it with [Own::new].
     pub fn new_box(value: T) -> Self {
         Self::new(Box::new(value))
     }
@@ -50,6 +90,23 @@ impl<T: fmt::Debug + ?Sized> fmt::Debug for Ref<T> {
     }
 }
 
+impl<P: IsPtr + core::ops::Deref> IsPtr for Pin<P> {
+    type T = P::T;
+
+    fn into_raw_ptr(this: Self) -> NonNull<P::T> {
+        // SAFTEY: we never expose the unpinned T for mutation or move
+        let b = unsafe { Pin::into_inner_unchecked(this) };
+        IsPtr::into_raw_ptr(b)
+    }
+
+    unsafe fn from_raw_ptr(ptr: NonNull<P::T>) -> Self {
+        // SAFETY: same guarentees as the caller
+        let b: P = unsafe { IsPtr::from_raw_ptr(ptr) };
+        // SAFTEY: we never exposed the unpinned T for mutation or move
+        unsafe { Pin::new_unchecked(b) }
+    }
+}
+
 impl<T: ?Sized> IsPtr for Box<T> {
     type T = T;
 
@@ -60,19 +117,6 @@ impl<T: ?Sized> IsPtr for Box<T> {
     unsafe fn from_raw_ptr(ptr: NonNull<T>) -> Self {
         // SAFETY: same guarentees as the caller
         unsafe { Box::from_raw(ptr.as_ptr()) }
-    }
-}
-
-impl<T: ?Sized> IsPtr for Rc<T> {
-    type T = T;
-
-    fn into_raw_ptr(this: Self) -> NonNull<T> {
-        NonNull::new(Rc::into_raw(this).cast_mut()).unwrap()
-    }
-
-    unsafe fn from_raw_ptr(ptr: NonNull<T>) -> Self {
-        // SAFETY: same guarentees as the caller
-        unsafe { Rc::from_raw(ptr.as_ptr()) }
     }
 }
 
@@ -100,6 +144,21 @@ impl IsPtr for String {
     unsafe fn from_raw_ptr(ptr: NonNull<str>) -> Self {
         // SAFETY: same guarentees as the caller
         let b: Box<str> = unsafe { IsPtr::from_raw_ptr(ptr) };
+        b.into()
+    }
+}
+
+impl IsPtr for path::PathBuf {
+    type T = path::Path;
+
+    fn into_raw_ptr(this: Self) -> NonNull<path::Path> {
+        let b: Box<path::Path> = this.into();
+        IsPtr::into_raw_ptr(b)
+    }
+
+    unsafe fn from_raw_ptr(ptr: NonNull<path::Path>) -> Self {
+        // SAFETY: same guarentees as the caller
+        let b: Box<path::Path> = unsafe { IsPtr::from_raw_ptr(ptr) };
         b.into()
     }
 }

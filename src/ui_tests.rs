@@ -48,11 +48,11 @@ fn ref_with_helper() {
     let o = Own::new_box(42);
     let r = o.weak;
 
-    let result = r.with(|x| *x * 2);
+    let result = r.inspect(|x| *x * 2);
     assert_eq!(result, Some(84));
 
     drop(o);
-    let result = r.with(|x| *x * 2);
+    let result = r.inspect(|x| *x * 2);
     assert_eq!(result, None);
 }
 
