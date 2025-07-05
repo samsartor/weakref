@@ -2,13 +2,6 @@ use crate::{Own, Ref, pin};
 use std::sync::Arc;
 
 #[test]
-fn very_bad() {
-    let mut o = Own::new_box(42);
-    o.weak = Ref::null();
-    drop(o);
-}
-
-#[test]
 fn live_ref_get_some() {
     let o = Own::new_box(42);
     let r = o.weak;
@@ -214,4 +207,23 @@ fn deref_trait() {
 
     let s = Own::new(String::from("hello"));
     assert_eq!(&*s, "hello");
+}
+
+#[test]
+#[should_panic]
+fn replace_weak_with_valid() {
+    let a = Own::new_box(42);
+    let mut b = Own::new_box(43);
+    b.weak = a.weak;
+    drop(a);
+    drop(b);
+}
+
+#[test]
+#[should_panic]
+#[cfg(not(loom))]
+fn replace_weak_with_null() {
+    let mut o = Own::new_box(42);
+    o.weak = Ref::null();
+    dbg!(&*o);
 }

@@ -98,10 +98,23 @@ impl<P: IsPtr + Send + 'static> Own<P> {
         // occured and the pointer is running around somewhere, the cleanup
         // will be defered until that thread is unpinned. Otherwise it may occur
         // immediately.
-        let new_gen = self.weak.current_gen.fetch_add(1, Ordering::AcqRel) + 1;
+        let new_gen = self.weak.expected_gen + 1;
+        if self
+            .weak
+            .current_gen
+            .compare_exchange(
+                self.weak.expected_gen,
+                new_gen,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            )
+            .is_err()
+        {
+            panic!("Tried to drop a dead reference. Did you mutate Own.weak?");
+        }
 
         // Send the object to be dropped.
-        let ptr = unsafe { P::from_raw_ptr(self.weak.pointer.unwrap()) };
+        let ptr = unsafe { P::from_raw_ptr(self.weak.pointer.take().unwrap()) };
         guard.defer(move || drop(ptr));
 
         // Recycle the generation counter, so long as it is possible to kill one more time.
@@ -130,7 +143,7 @@ impl<P: IsPtr + Send + 'static> Deref for Own<P> {
 
     fn deref(&self) -> &Self::Target {
         // Provide the reference.
-        // SAFETY: this is always safe since `self` can not have been dropped
+        // SAFETY: this is always safe since `self` can not have been dropped.
         unsafe { self.weak.pointer.unwrap().as_ref() }
     }
 }

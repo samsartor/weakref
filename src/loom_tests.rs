@@ -99,3 +99,27 @@ pub fn concurrent_recycler_stress() {
         });
     });
 }
+
+#[test]
+pub fn concurrent_replace_with_bad() {
+    use std::mem::ManuallyDrop;
+    use std::panic::catch_unwind;
+    loom::model(|| {
+        crate::guts::empty_recycler();
+        let mut orig = ManuallyDrop::new(Own::new_box(42));
+        let mut dupl = ManuallyDrop::new(Own::new_box(0));
+        dupl.weak = orig.weak;
+        loom::thread::spawn(move || {
+            // panicing is good behavior
+            // the unsafe is not needed, just lets us test better
+            let _ = catch_unwind(move || unsafe { ManuallyDrop::drop(&mut dupl) });
+        });
+        loom::thread::spawn(move || {
+            // USE AFTER FREE!
+            println!("{}", &**orig);
+            // panicing is good behavior
+            // the unsafe is not needed, just lets us test better
+            let _ = catch_unwind(move || unsafe { ManuallyDrop::drop(&mut orig) });
+        });
+    });
+}
