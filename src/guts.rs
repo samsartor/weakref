@@ -166,6 +166,9 @@ impl<P: IsPtr + Send + 'static> Deref for Own<P> {
     }
 }
 
+unsafe impl<P: IsPtr + Send> Send for Own<P> where P::T: Sync {}
+unsafe impl<P: IsPtr + Send> Sync for Own<P> where P::T: Sync {}
+
 /// Weak reference for a value which checks liveness at runtime.
 #[repr(C)]
 pub struct Ref<T: ?Sized> {
