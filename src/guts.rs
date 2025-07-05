@@ -175,7 +175,7 @@ pub struct Ref<T: ?Sized> {
     pointer: Option<NonNull<T>>,
 }
 
-unsafe impl<T: Send + ?Sized> Send for Ref<T> {}
+unsafe impl<T: Sync + ?Sized> Send for Ref<T> {}
 unsafe impl<T: Sync + ?Sized> Sync for Ref<T> {}
 
 impl<T: ?Sized> Clone for Ref<T> {
