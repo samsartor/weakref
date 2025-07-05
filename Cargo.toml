@@ -9,6 +9,7 @@ readme = "README.md"
 repository = "https://github.com/samsartor/weakref"
 license = "MIT"
 keywords = ["generational", "reference", "copy"]
+categories = ["memory-management"]
 
 [dependencies]
 crossbeam-epoch = "0.9"
@@ -23,3 +24,10 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [target.'cfg(loom)'.dependencies]
 loom = "0.7"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "weakref_bench"
+harness = false

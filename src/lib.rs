@@ -1,6 +1,7 @@
 //! Weakref provides a cheap `Copy + 'static` reference type [`Ref<T>`]. You can
 //! pass it anywhere almost effortlessly, then check if the reference is alive
-//! at runtime.
+//! at runtime. The single owner [`Own<T>`] increments a global per-object generation
+//! counter when dropped.
 //!
 //! This is inspired by <https://verdagon.dev/blog/surprising-weak-refs>, although
 //! the implementation has changed quite a bit vs what is used in Vale.
@@ -24,20 +25,18 @@
 //!
 //! # Performance Characteristics
 //!
-//! - **Creation**: `Own::new()` is O(1) with minimal allocation overhead
-//! - **Copying refs**: `Ref` is `Copy`, so totally free
-//! - **Access**: `Ref::get()` is O(1) but requires acquiring an epoch guard
-//! - **Dropping**: `Own` drop is O(1), cleanup is deferred to epoch collection
-//! - **Memory**: Each `Own` and `Ref` has ~24 bytes overhead (in addition to the original pointer and data)
+//! Each `Own/Ref` is 24 bytes on the stack, and globally allocates a single 8-byte generation counter. The counter
+//! can never be freed (since it must remain accessible to `Ref` forever) but can be reused indefinitely. Access
+//! requires pinning the thread with crossbeam_epoch and atomically loading the generation counter to check if
+//! it matches. Dropping Own requires pinning the thread, deferring the destructor, incrementing the generation counter,
+//! and pushing it to a queue to be reused.
 //!
-//! Note that weakref must leak ~8 bytes for every simultaneously-existing object. Those leaked allocations
-//! will be reused by weakref indefinitely but can never be returned to the system.
-//!
-//! Compared to `Arc<T>` + `Weak<T>`:
-//! - Faster cloning (no atomic operations)
-//! - Cheaper storage (no reference counting)
-//! - Requires explicit pinning for access
-//! - Uses epoch-based memory reclamation instead of reference counting
+//! Weakref has broadly similar performance as Arc, except with totally free Ref copies. As of version 0.1.0 my benchmarks show Own+Ref behind but with plenty of room still for optimization.
+//! |          | Own+Ref | Arc+Weak |
+//! | -------- | ------- | -------- |
+//! | Creation | 16ns    | 12ns     |
+//! | Access   | 5ns     | 3ns      |
+//! | Drop     | 60ns    | 20ns     |
 
 use std::path;
 use std::pin::Pin;
@@ -202,7 +201,7 @@ impl IsPtr for () {
 /// [disjoint capturing](https://doc.rust-lang.org/reference/types/closure.html#capture-precision)
 /// to precreate a weak refrence and capture that instead.
 ///
-/// __Make sure to mark your closure as `move`, or you may get a "cannot move out of" error.__
+/// __Make sure to mark your closure as `move`, or you will get a confusing "cannot move out of" error.__
 ///
 /// # Examples
 ///
