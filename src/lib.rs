@@ -3,35 +3,18 @@
 //! at runtime.
 //!
 //! ```
-//! use weakref::{Own, Ref, pin};
+//! use weakref::{Own, Ref, pin, refer};
 //!
 //! let data = Own::new(vec![1, 2, 3]);
 //!
 //! std::thread::spawn(move || {
-//!     match data.weak.get(&pin()) {
+//!     match refer!(data).get(&pin()) {
 //!         Some(data) => println!("{data:?} is still alive!"),
 //!         None => println!("data got dropped!"),
 //!     }
 //! });
 //!
 //! drop(data);
-//! ```
-//!
-//! Notice you can downgrade an `owner: Own<Box<T>>` to a weak
-//! `Ref<T>` by simply accessing [owner.weak](field@Own::weak)
-//! field. This allows closures to [capture weak references from owners](https://doc.rust-lang.org/reference/types/closure.html#capture-precision)
-//! without any need to pre-call methods like `Arc.clone()`:
-//! ```
-//!# use weakref::{Own, Ref, pin};
-//!# use std::sync::{Arc, Weak};
-//! // With weakref
-//! let data = Own::new_box(42);
-//! move || { data.weak.get(&pin()); };
-//!
-//! // With std
-//! let data = Arc::new(42);
-//! let weak_data = Arc::downgrade(&data);
-//! move || { weak_data.upgrade(); };
 //! ```
 
 use std::path;
@@ -186,4 +169,27 @@ impl IsPtr for () {
     }
 
     unsafe fn from_raw_ptr(_: NonNull<Self::T>) -> Self {}
+}
+
+/// Like [Own::refer] but does not try to capture the owner.
+///
+///
+/// ```
+///# use weakref::{Own, Ref, pin, refer};
+///# use std::sync::{Arc, Weak};
+/// // With weakref
+/// let data = Own::new_box(42);
+/// move || { refer!(data).get(&pin()); };
+///
+/// // With std
+/// let data = Arc::new(42);
+/// let weak_data = Arc::downgrade(&data);
+/// move || { weak_data.upgrade(); };
+/// ```
+#[macro_export]
+macro_rules! refer {
+    ($owner:expr) => {{
+        let r: $crate::Ref<_> = $owner._weak;
+        r
+    }};
 }

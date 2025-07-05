@@ -39,8 +39,21 @@ pub trait IsPtr {
 /// Unique owner for a value, which will inform references when dropped.
 #[repr(transparent)]
 pub struct Own<P: IsPtr + Send + 'static> {
-    /// The weak reference.
-    pub weak: Ref<P::T>,
+    /// The weak reference. _SAFETY: Do not mutate._
+    ///
+    /// It would be nice to make this public, but there are soundness
+    /// issues with allowing users to reassign it. Instead we limit access
+    /// to the `refer` method and macro.
+    ///
+    /// ```ignore
+    /// let a = Own::new_box(42);
+    /// let mut b = Own::new_box(43);
+    /// b._weak = a._weak;
+    /// std::thread::spawn(mut || { drop(b); });
+    /// std::thread::spawn(mut || { *a; });
+    /// ```
+    #[doc(hidden)]
+    pub _weak: Ref<P::T>,
 }
 
 impl<P: IsPtr + Send + 'static> Own<P> {
@@ -58,11 +71,16 @@ impl<P: IsPtr + Send + 'static> Own<P> {
         Self::new_reuse(other.kill(&pin()).unwrap(), ptr)
     }
 
+    /// Provides the weak pointer.
+    pub fn refer(&self) -> Ref<P::T> {
+        self._weak
+    }
+
     fn new_reuse(current_gen: CurrentGen, ptr: P) -> Self {
         let pointer = Some(P::into_raw_ptr(ptr));
         let expected_gen = current_gen.load(Ordering::Acquire);
         Own {
-            weak: Ref {
+            _weak: Ref {
                 current_gen,
                 expected_gen,
                 pointer,
@@ -75,7 +93,7 @@ impl<P: IsPtr + Send + 'static> Own<P> {
         let current_gen = Box::leak(Box::new(AtomicUsize::new(0)));
         let expected_gen = 0;
         Own {
-            weak: Ref {
+            _weak: Ref {
                 current_gen,
                 expected_gen,
                 pointer,
@@ -98,30 +116,30 @@ impl<P: IsPtr + Send + 'static> Own<P> {
         // occured and the pointer is running around somewhere, the cleanup
         // will be defered until that thread is unpinned. Otherwise it may occur
         // immediately.
-        let new_gen = self.weak.expected_gen + 1;
+        let new_gen = self._weak.expected_gen + 1;
         if self
-            .weak
+            ._weak
             .current_gen
             .compare_exchange(
-                self.weak.expected_gen,
+                self._weak.expected_gen,
                 new_gen,
                 Ordering::AcqRel,
                 Ordering::Relaxed,
             )
             .is_err()
         {
-            panic!("Tried to drop a dead reference. Did you mutate Own.weak?");
+            panic!("Tried to drop a dead reference. Did you mutate Own._weak?");
         }
 
         // Send the object to be dropped.
-        let ptr = unsafe { P::from_raw_ptr(self.weak.pointer.take().unwrap()) };
+        let ptr = unsafe { P::from_raw_ptr(self._weak.pointer.take().unwrap()) };
         guard.defer(move || drop(ptr));
 
         // Recycle the generation counter, so long as it is possible to kill one more time.
         // Otherwise leak it forever, since it is completely unusable. This should
         // never happen in practice.
         if new_gen != usize::MAX {
-            Some(self.weak.current_gen)
+            Some(self._weak.current_gen)
         } else {
             None
         }
@@ -144,7 +162,7 @@ impl<P: IsPtr + Send + 'static> Deref for Own<P> {
     fn deref(&self) -> &Self::Target {
         // Provide the reference.
         // SAFETY: this is always safe since `self` can not have been dropped.
-        unsafe { self.weak.pointer.unwrap().as_ref() }
+        unsafe { self._weak.pointer.unwrap().as_ref() }
     }
 }
 
@@ -176,7 +194,7 @@ impl<T: ?Sized> Ref<T> {
     /// ```
     ///# use weakref::{Own, pin};
     /// let data = Own::new_box(42);
-    /// let weak = data.weak;
+    /// let weak = data.refer();
     /// assert_eq!(weak.get(&pin()), Some(&42));
     /// drop(data);
     /// assert_eq!(weak.get(&pin()), None);
@@ -203,7 +221,7 @@ impl<T: ?Sized> Ref<T> {
     /// ```
     ///# use weakref::{Own, Ref, pin};
     /// let list = Own::new(vec![1, 2, 3]);
-    /// let elem: Ref<i32> = list.weak.map(|x| &x[2]);
+    /// let elem: Ref<i32> = list.refer().map(|x| &x[2]);
     /// assert_eq!(elem.get(&pin()), Some(&3));
     /// drop(list);
     /// assert_eq!(elem.get(&pin()), None);
@@ -228,7 +246,7 @@ impl<T: ?Sized> Ref<T> {
     /// ```
     ///# use weakref::{Own, Ref, pin};
     /// let list = Own::new(vec![1, 2, 3]);
-    /// let elem: Ref<i32> = list.weak.filter_map(|x| x.get(100));
+    /// let elem: Ref<i32> = list.refer().filter_map(|x| x.get(100));
     /// assert_eq!(elem.get(&pin()), None);
     /// ```
     pub fn filter_map<R: ?Sized>(self, func: impl FnOnce(&T) -> Option<&R>) -> Ref<R> {
@@ -258,7 +276,7 @@ impl<T: ?Sized> Ref<T> {
     /// assert_eq!(null.get(&pin()), None);
     /// ```
     #[cfg(not(loom))]
-    pub fn null() -> Self {
+    pub const fn null() -> Self {
         static STATIC_GEN: AtomicUsize = AtomicUsize::new(usize::MAX);
         Ref {
             current_gen: &STATIC_GEN,
