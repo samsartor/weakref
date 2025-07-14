@@ -1,5 +1,8 @@
 use crate::{Own, pin};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering::Relaxed},
+};
 
 #[test]
 fn live_ref_get_some() {
@@ -207,6 +210,32 @@ fn deref_trait() {
 
     let s = Own::new(String::from("hello"));
     assert_eq!(&*s, "hello");
+}
+
+#[test]
+fn should_drop_on_unpin() {
+    static HAS_DROPPED: AtomicBool = AtomicBool::new(false);
+
+    struct FlagDrop;
+    impl Drop for FlagDrop {
+        fn drop(&mut self) {
+            HAS_DROPPED.store(true, Relaxed);
+        }
+    }
+
+    for i in 0..10 {
+        let o = Own::new_box(FlagDrop);
+        let r = o.refer();
+        let g = pin();
+        assert!(r.get(&g).is_some());
+        drop(o);
+        assert!(r.get(&g).is_none());
+        if i == 0 {
+            assert!(!HAS_DROPPED.load(Relaxed));
+        }
+        g.flush();
+    }
+    assert!(HAS_DROPPED.load(Relaxed));
 }
 
 /*

@@ -64,7 +64,7 @@ pub(crate) fn global_recycler_len() -> usize {
     GLOBAL_RECYCLER.len()
 }
 
-/// Implemented for any owning pointer.
+/// Implemented for any owning pointer which can be dereferenced as `T`.
 ///
 /// # Safety
 /// When accepting an unknown `impl IsPtr`, be aware of the various guarantees
@@ -81,9 +81,20 @@ pub trait IsPtr {
     /// # Safety
     /// The given pointer must have been returned by [Self::into_raw_ptr].
     unsafe fn from_raw_ptr(ptr: NonNull<Self::T>) -> Self;
+
+    /// An optional handler for when `Own<Self>` is dropped.
+    fn on_killed(_this: &Self) {}
 }
 
 /// Unique owner for a value, which will inform references when dropped.
+///
+/// Note that [Ref::is_alive] will return false almost instantly after this
+/// object is dropped, but `P` itself may continue to live for an arbitrarily long
+/// time depending on when [crossbeam_epoch] decides to garbage collect. **Do not
+/// rely on the drop impl of `P:T` to release mutexes or wake tasks.**
+///
+/// If you need something to occur instantly on drop, consider implementing [IsPtr::on_killed]
+/// yourself.
 #[repr(transparent)]
 pub struct Own<P: IsPtr + Send + 'static> {
     /// The weak reference. _SAFETY: Do not mutate._
@@ -164,6 +175,7 @@ impl<P: IsPtr + Send + 'static> Own<P> {
 
         // Send the object to be dropped.
         let ptr = unsafe { P::from_raw_ptr(self._weak.pointer.take().unwrap()) };
+        P::on_killed(&ptr);
         guard.defer(move || drop(ptr));
 
         // Recycle the generation counter, so long as it is possible to kill one more time.
