@@ -212,6 +212,10 @@ impl<P: IsPtr + Send + 'static> Deref for Own<P> {
 unsafe impl<P: IsPtr + Send> Send for Own<P> where P::T: Sync {}
 unsafe impl<P: IsPtr + Send> Sync for Own<P> where P::T: Sync {}
 
+fn non_null_from_ref<T: ?Sized>(r: &T) -> NonNull<T> {
+    NonNull::new((r as *const T).cast_mut()).unwrap()
+}
+
 /// Weak reference for a value which checks liveness at runtime.
 #[repr(C)]
 pub struct Ref<T: ?Sized> {
@@ -283,7 +287,7 @@ impl<T: ?Sized> Ref<T> {
             current_gen: self.current_gen,
             expected_gen: self.expected_gen,
             pointer: match self.get(guard) {
-                Some(value) => Some(NonNull::from_ref(func(value))),
+                Some(value) => Some(non_null_from_ref(func(value))),
                 None => None,
             },
         }
@@ -310,7 +314,7 @@ impl<T: ?Sized> Ref<T> {
             current_gen: self.current_gen,
             expected_gen: self.expected_gen,
             pointer: match self.get(guard) {
-                Some(value) => func(value).map(NonNull::from_ref),
+                Some(value) => func(value).map(non_null_from_ref),
                 None => None,
             },
         }
