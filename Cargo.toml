@@ -1,7 +1,7 @@
 [package]
 name = "weakref"
 version = "0.2.0"
-edition = "2024"
+edition = "2021"
 authors = ["Sam Sartor <me@samsartor.com>"]
 description = "Copy+static reference type which checks liveness at runtime."
 documentation = "https://docs.rs/weakref"
@@ -10,6 +10,7 @@ repository = "https://github.com/samsartor/weakref"
 license = "MIT"
 keywords = ["generational", "reference", "copy"]
 categories = ["memory-management"]
+rust-version = "1.83"
 
 [dependencies]
 crossbeam-epoch = "0.9"
