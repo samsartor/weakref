@@ -10,16 +10,14 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     - uses: extractions/setup-just@v3
     - uses: actions-rs/toolchain@v1
       with:
-        toolchain: nightly
-        components: miri
+        toolchain: 1.83
         override: true
     - name: Test
       run: just test
