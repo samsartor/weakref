@@ -1,6 +1,6 @@
 use core::ops::Deref;
 use core::ptr::NonNull;
-use crossbeam_epoch::{Guard, pin};
+use crossbeam_epoch::{pin, Guard};
 use crossbeam_queue::SegQueue;
 use std::{cell::RefCell, mem::ManuallyDrop};
 
@@ -355,5 +355,9 @@ impl<T: ?Sized> Ref<T> {
             expected_gen: 0,
             pointer: None,
         }
+    }
+
+    pub fn about(&self) -> (Option<NonNull<T>>, usize) {
+        (self.pointer, self.expected_gen)
     }
 }
