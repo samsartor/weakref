@@ -131,6 +131,14 @@ impl<P: IsPtr + Send + 'static> Own<P> {
         self._weak
     }
 
+    pub fn clone_ptr(&self) -> P
+    where
+        P: Clone,
+    {
+        let original = ManuallyDrop::new(unsafe { P::from_raw_ptr(self._weak.pointer.unwrap()) });
+        (*original).clone()
+    }
+
     fn new_reuse(current_gen: GenerationCounter, ptr: P) -> Self {
         let pointer = Some(P::into_raw_ptr(ptr));
         let expected_gen = current_gen.load(Ordering::Acquire);
