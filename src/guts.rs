@@ -289,6 +289,27 @@ impl<T: ?Sized> Ref<T> {
         self.map_with(func, &pin())
     }
 
+    /// Like [Self::map] but does not need to pin the current thread.
+    ///
+    /// # SAFETY
+    ///
+    /// The given function must not dereference the given pointer, only perform
+    /// arithmatic on it. This is because the pointer may not be live at time of
+    /// use.
+    pub unsafe fn map_unchecked<R: ?Sized>(
+        self,
+        func: impl FnOnce(*const T) -> *const R,
+    ) -> Ref<R> {
+        Ref {
+            current_gen: self.current_gen,
+            expected_gen: self.expected_gen,
+            pointer: match self.pointer {
+                Some(ptr) => NonNull::new(func(ptr.as_ptr()).cast_mut()),
+                None => None,
+            },
+        }
+    }
+
     /// Like [Ref::map], but cheaper if a thread guard is already available.
     pub fn map_with<R: ?Sized>(&self, func: impl FnOnce(&T) -> &R, guard: &Guard) -> Ref<R> {
         Ref {
