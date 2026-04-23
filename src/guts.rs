@@ -131,11 +131,20 @@ impl<P: IsPtr + Send + 'static> Own<P> {
         self._weak
     }
 
-    pub fn clone_ptr(&self) -> P
+    /// Clones the underlying pointer object. Particularly useful
+    /// when wrapping a reference-counted pointer:
+    /// ```
+    ///# use std::sync::Arc;
+    ///# use weakref::Own;
+    /// let a = Own::new(Arc::new(42));
+    /// let b = Own::clone_ptr(&a);
+    /// assert_eq!(*a, *b);
+    /// ```
+    pub fn clone_ptr(this: &Self) -> P
     where
         P: Clone,
     {
-        let original = ManuallyDrop::new(unsafe { P::from_raw_ptr(self._weak.pointer.unwrap()) });
+        let original = ManuallyDrop::new(unsafe { P::from_raw_ptr(this._weak.pointer.unwrap()) });
         (*original).clone()
     }
 
@@ -386,6 +395,8 @@ impl<T: ?Sized> Ref<T> {
         }
     }
 
+    /// Reports the underlying pointer and expected generation counter,
+    /// mainly for testing referential equality.
     pub fn about(&self) -> (Option<NonNull<T>>, usize) {
         (self.pointer, self.expected_gen)
     }
